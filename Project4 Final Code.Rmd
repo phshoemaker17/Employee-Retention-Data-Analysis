@@ -1,0 +1,423 @@
+---
+title: "ML_Project4"
+author: "Breanna Barton"
+date: "5/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library('readxl')
+library(ROSE)
+library(car)
+library(rsample)
+library(randomForest)
+library(ranger)  
+library(caret) 
+library(ROCR)
+library(rpart.plot)
+library(rpart)
+library(ipred)
+library(dplyr)
+
+set.seed(171)
+setwd("C:/Users/Peter Shoemaker/OneDrive/Desktop/Grad School/Machine Learning I/Project 4")
+# load data
+emp <- read_excel("Employee_Data_Project.xlsx")
+head(emp)
+
+# training and testing data
+trainrows <- sample(rownames(emp), dim(emp)[1]*0.7)
+train <- emp[trainrows, ]
+testrows <- setdiff(rownames(emp), trainrows)
+test <- emp[testrows, ]
+
+# data cleaning
+train$JobSatisfaction <- as.numeric(train$JobSatisfaction)
+train$EnvironmentSatisfaction <- as.numeric(train$EnvironmentSatisfaction)
+train$TotalWorkingYears <- as.numeric(train$TotalWorkingYears)
+train$NumCompaniesWorked <- as.numeric(train$NumCompaniesWorked)
+
+
+
+test$JobSatisfaction <- as.numeric(test$JobSatisfaction)
+test$EnvironmentSatisfaction <- as.numeric(test$EnvironmentSatisfaction)
+test$TotalWorkingYears <- as.numeric(test$TotalWorkingYears)
+test$NumCompaniesWorked <- as.numeric(test$NumCompaniesWorked)
+
+#modifications
+train$BusinessTravel <- as.factor(train$BusinessTravel)
+test$BusinessTravel <- as.factor(test$BusinessTravel)
+train$MaritalStatus <- as.factor(train$MaritalStatus)
+test$MaritalStatus <- as.factor(test$MaritalStatus)
+train$Gender <- as.factor(train$Gender)
+test$Gender <- as.factor(test$Gender)
+train$Single <- ifelse(train$MaritalStatus=='Single',1,0)
+test$Single <- ifelse(test$MaritalStatus=='Single',1,0)
+train$FreqTravel <- ifelse(train$BusinessTravel=='Travel_Frequently',1,0)
+test$FreqTravel <- ifelse(test$BusinessTravel=='Travel_Frequently',1,0)
+
+
+train <- na.omit(train)
+test <- na.omit(test)
+
+colSums(is.na(train))
+colSums(is.na(test))
+
+# Attrition - change yes to 1 and no to 0
+train$Attrition <- ifelse(train$Attrition =="Yes", 1, 0)
+test$Attrition <- ifelse(test$Attrition =="Yes", 1, 0)
+
+str(train)
+str(test)
+```
+
+
+LOGISTIC REGRESSION: What factors lead to employee attrition within the company? Use Logistic Regression to determine the model fit. What are the top 3 variables based on the logistic regression model that is most important for the management to address right away to curb attrition? (15 points)
+
+```{r}
+# Downsampling
+
+data_balanced_under <- ovun.sample(Attrition ~ ., data = train, method = "under",N = 1000)$data
+table(data_balanced_under$Attrition)
+
+data_balanced_under$NumCompaniesWorked <- as.numeric(data_balanced_under$NumCompaniesWorked)
+data_balanced_under$BusinessTravel <- as.factor(data_balanced_under$BusinessTravel)
+data_balanced_under$MaritalStatus <- as.factor(data_balanced_under$MaritalStatus)
+data_balanced_under$Gender <- as.factor(data_balanced_under$Gender)
+data_balanced_under$Single <- ifelse(data_balanced_under$MaritalStatus=='Single',1,0)
+data_balanced_under$FreqTravel <- ifelse(data_balanced_under$BusinessTravel=='Travel_Frequently',1,0)
+
+
+train = data_balanced_under
+
+
+# logistic model
+Logistic_model10 <- glm(formula = Attrition ~ Age + JobSatisfaction + FreqTravel + Single + NumCompaniesWorked + TrainingTimesLastYear + YearsWithCurrManager + EnvironmentSatisfaction, family = binomial(), data = data_balanced_under)
+
+summary(Logistic_model10)
+
+stepmodel4 = step(Logistic_model10, direction="both")
+
+formula(stepmodel4)
+summary(stepmodel4)
+
+
+test$Single <- ifelse(test$MaritalStatus=='Single',1,0)
+test$FreqTravel <- ifelse(test$BusinessTravel=='Travel_Frequently',1,0)
+
+vif(stepmodel4)
+
+pred <- predict(object = stepmodel4, newdata = test, type = "response")
+
+head(pred)
+summary(pred)
+
+#Lets set the threshold to 0.50 for predicting into 1
+test$predicted<-ifelse(pred>=0.5, 1, 0)
+head(test$predicted)
+ 
+# Accuracy of model 
+table(test$Attrition, test$predicted)
+
+confusionMatrix(data = as.factor(test$predicted),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+
+
+#ROC
+roc_pred <- prediction(predictions = pred  , labels = test$Attrition)
+roc_perf <- performance(roc_pred , "tpr" , "fpr")
+plot(roc_perf,
+     colorize = TRUE,
+     print.cutoffs.at= seq(0,1,0.05),
+     text.adj=c(-0.2,1.7))
+
+# AUC (TWO WAYS)
+logistic_roc = roc.curve(test$Attrition, pred)
+auc_logistic_regression = as.numeric(performance(roc_pred, "auc")@y.values)
+
+# RMSE for logistic regression
+RMSE(pred = pred, obs = test$Attrition)
+```
+
+
+DECISION TREES: What factors lead to employee attrition within the company? Use Decision Trees to determine the response. What are the top 3 variables based on the Decision Tree model that is most important for the management to address right away to curb attrition? (30 points)
+
+```{r}
+
+#### INITIAL DECISION TREE #####
+
+# Simple Regression Tree
+# CART Modeling - Classification and regression trees
+# method = "class" for classification tree
+# method = "anova" for regression tree
+m1 <- rpart(
+  formula = Attrition ~ .,
+  data    = train,
+  method  = "class"
+)
+
+m1
+
+varImp(m1)
+
+#Plot the tree
+rpart.plot(m1)
+
+#ANOVA - Continuous Response
+#shows the predicted value (is this the probability of attrition? or the error?)
+#shows percentage of observations in the node
+
+#CLASS - Binary Response
+#shows the predicted class
+#shows the predicted probability
+#shows the percentage of observatiosn in the node 
+
+#Plot cross-validation error with cost complexity or α value
+plotcp(m1)
+
+#display cp table
+printcp(m1)
+
+#plot approximate R-squared and relative error for different splits (2 plots), labels are only appropriate for the "anova" method
+rsq.rpart(m1)
+
+#detailed results including surrogate splits
+summary(m1)
+```
+
+```{r}
+#### TUNING ####
+
+#Instead of manual tuning, we can do a grid search over range of minsplits and maxdepths
+hyper_grid <- expand.grid(
+  minsplit = seq(5, 10, 1), #5-20, incrementing by 1
+  maxdepth = seq(3, 8, 1) #7-12, incrementing by 1
+)
+
+head(hyper_grid)
+
+# total number of combinations
+nrow(hyper_grid)
+
+#To automate the modeling, we simply set up a for loop and iterate through each minsplit and maxdepth combination 
+#We save each model into its own list item
+
+models <- list()
+
+for (i in 1:nrow(hyper_grid)) {
+  # get minsplit, maxdepth values at row i
+  minsplit <- hyper_grid$minsplit[i]
+  maxdepth <- hyper_grid$maxdepth[i]
+  
+  # train a model and store in the list
+  models[[i]] <- rpart(
+    formula = Attrition ~ .,
+    data    = train,
+    method  = "anova",
+    control = list(minsplit = minsplit, maxdepth = maxdepth)
+  )
+}
+
+# function to get optimal cp
+get_cp <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  cp <- x$cptable[min, "CP"] 
+}
+
+# function to get minimum error
+get_min_error <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  xerror <- x$cptable[min, "xerror"] 
+}
+
+set.seed(171)
+hyper_grid %>%
+  mutate(
+    cp    = purrr::map_dbl(models, get_cp),
+    error = purrr::map_dbl(models, get_min_error)
+  ) %>%
+  arrange(error) %>%
+  top_n(-5, wt = error)
+
+
+```
+
+
+```{r}
+### PREDICTION ON TEST SET ###
+
+# we want to choose the lowest error value and use the corresponding minsplit and maxdepth values
+# grid search helps obtain the more optimal model
+
+# predict on test set with optimal numbers
+
+optimal_tree <- rpart(
+  formula = Attrition ~ .,
+  data    = train,
+  method  = "anova",
+  control = list(minsplit = 5, maxdepth = 6, cp = 0.01)
+)
+
+pred_tree <- predict(optimal_tree, newdata = test)
+
+RMSE(pred = pred_tree, obs = test$Attrition)
+# with values of this gives the final RMSE of 0.3628671 which suggests that...
+
+optimal_tree
+
+rpart.plot(optimal_tree)
+
+varImp(optimal_tree)
+
+
+#PETER CODE
+pred_tree <-ifelse(pred_tree >= 0.5, 1, 0)
+confusionMatrix(data = as.factor(pred_tree),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+roc_pred2 <- prediction(predictions = pred_tree  , labels = test$Attrition)
+# AUC (TWO WAYS)
+tree_roc = roc.curve(test$Attrition, pred_tree)
+auc_tree = as.numeric(performance(roc_pred2, "auc")@y.values)
+
+
+```
+
+EXTENDING DECISION TREES: Use Bagging and Random Forest methods to determine employee attrition (30 points)
+
+```{r}
+
+#############BAGGING###############
+#make bootstrapping reproducible
+set.seed(171)
+
+# train bagged model
+bagged_m1 <- bagging(
+  formula = Attrition ~ .,
+  data    = train,
+  coob    = TRUE
+)
+
+bagged_m1
+
+# assess 10-50 bagged trees
+ntree <- 10:50
+
+# create empty vector to store OOB RMSE values
+rmse <- vector(mode = "numeric", length = length(ntree))
+
+for (i in seq_along(ntree)) {
+  # reproducibility
+  set.seed(171)
+  
+  # perform bagged model
+  model <- bagging(
+    formula = Attrition ~ .,
+    data    = train,
+    coob    = TRUE,
+    nbagg   = ntree[i]
+  )
+  # get OOB error
+  rmse[i] <- model$err
+}
+
+plot(ntree, rmse, type = 'l', lwd = 2)
+abline(v = 25, col = "red", lty = "dashed")
+
+
+
+#BAGGING WITH CARET PACKAGE
+#Bagging with caret helps to perform cross-validation easily and assess variable importance across bagged trees
+#10-fold cross-validation
+
+train$Attrition <- as.factor(train$Attrition)
+str(train)
+
+
+# Specify 10-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 10) 
+
+# CV bagged model
+bagged_cv <- train(
+  Attrition ~ .,
+  data = train,
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE, 
+  na.action=na.omit
+)
+
+# assess results
+bagged_cv
+
+# plot most important variables
+plot(varImp(bagged_cv), 20)  
+
+#Predicting to test set
+#pred2 <- predict(bagged_cv, test, na.action=na.roughfix)
+pred2 <- as.numeric(predict(bagged_cv, test))
+pred2 <-ifelse(pred2 >= 1.5, 1, 0)
+RMSE(pred2, test$Attrition)
+
+#PETER CODE
+bagging_confusion = confusionMatrix(data = as.factor(pred2),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+bagging_roc = roc.curve(test$Attrition, pred2)
+roc_pred2 <- prediction(predictions = pred2  , labels = test$Attrition)
+auc_bagging = as.numeric(performance(roc_pred2, "auc")@y.values)
+
+
+#############RANDOM FOREST###############
+
+train$Attrition <- as.numeric(train$Attrition)
+str(train)
+
+#use set.seed for reproducibility
+set.seed(171)
+
+# default RF model
+#you can either impute missing values before model or use na.action = na.roughfix for mean/mode values
+#of use na.action=na.omit if you would like to omit all columns that have at least one missing value
+rf1 <- randomForest(
+  formula = Attrition ~ .,
+  data    = train
+  #,na.action=na.roughfix
+)
+
+#na.action=na.roughfix -> imputes missing values using median or mode...only works for numeric or factor 
+
+rf1
+
+#Plotting the model will illustrate the error rate as we average across more trees
+plot(rf1)
+
+#Error rate based on the Out of Bag (OOB) sample error can be accessed at m1$mse 
+#No. of trees with lowest MSE
+which.min(rf1$mse)
+
+# RMSE of this optimal random forest
+sqrt(rf1$mse[which.min(rf1$mse)])
+
+summary(rf1)
+
+varImp(rf1)%>%
+  top_n(10)%>%
+  arrange(desc(Overall))
+
+#PETER CODE
+pred3 <- predict(rf1, test)
+pred3 = pred3 - 1
+pred3 <-ifelse(pred3>=0.5, 1, 0)
+rf_confusion = confusionMatrix(data = as.factor(pred3),
+                reference =  as.factor(test$Attrition),
+                positive = "1")
+
+random_forest_roc = roc.curve(test$Attrition, pred3)
+roc_pred3 <- prediction(predictionse = pred3  , labels = test$Attrition)
+auc_random_forest = as.numeric(performance(roc_pred3, "auc")@y.values)
+
+```
+
+
